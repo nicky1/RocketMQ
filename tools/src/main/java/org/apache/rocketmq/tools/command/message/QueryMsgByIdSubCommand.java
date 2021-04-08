@@ -67,11 +67,6 @@ public class QueryMsgByIdSubCommand implements SubCommand {
         );
 
         System.out.printf("%-20s %s%n",
-            "OffsetID:",
-            msgId
-        );
-
-        System.out.printf("%-20s %s%n",
             "Topic:",
             msg.getTopic()
         );
@@ -279,11 +274,11 @@ public class QueryMsgByIdSubCommand implements SubCommand {
             MessageExt msg = defaultMQAdminExt.viewMessage(msgId);
             if (msg != null) {
                 // resend msg by id
-                System.out.printf("prepare resend msg. originalMsgId=" + msgId);
+                System.out.printf("prepare resend msg. originalMsgId=%s", msgId);
                 SendResult result = defaultMQProducer.send(msg);
                 System.out.printf("%s", result);
             } else {
-                System.out.printf("no message. msgId=" + msgId);
+                System.out.printf("no message. msgId=%s", msgId);
             }
         } catch (Exception e) {
             e.printStackTrace();

@@ -32,6 +32,7 @@ import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.common.protocol.header.PullMessageRequestHeader;
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -53,7 +54,7 @@ import static org.mockito.Mockito.when;
 @RunWith(MockitoJUnitRunner.class)
 public class DefaultMQPullConsumerTest {
     @Spy
-    private MQClientInstance mQClientFactory = MQClientManager.getInstance().getAndCreateMQClientInstance(new ClientConfig());
+    private MQClientInstance mQClientFactory = MQClientManager.getInstance().getOrCreateMQClientInstance(new ClientConfig());
     @Mock
     private MQClientAPIImpl mQClientAPIImpl;
     private DefaultMQPullConsumer pullConsumer;
@@ -81,6 +82,11 @@ public class DefaultMQPullConsumerTest {
     @After
     public void terminate() {
         pullConsumer.shutdown();
+    }
+
+    @Test
+    public void testStart_OffsetShouldNotNUllAfterStart() {
+        Assert.assertNotNull(pullConsumer.getOffsetStore());
     }
 
     @Test

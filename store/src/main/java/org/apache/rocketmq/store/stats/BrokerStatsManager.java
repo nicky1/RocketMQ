@@ -21,11 +21,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.constant.LoggerName;
+import org.apache.rocketmq.logging.InternalLogger;
+import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.stats.MomentStatsItemSet;
 import org.apache.rocketmq.common.stats.StatsItem;
 import org.apache.rocketmq.common.stats.StatsItemSet;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class BrokerStatsManager {
 
@@ -60,8 +60,8 @@ public class BrokerStatsManager {
     /**
      * read disk follow stats
      */
-    private static final Logger log = LoggerFactory.getLogger(LoggerName.ROCKETMQ_STATS_LOGGER_NAME);
-    private static final Logger COMMERCIAL_LOG = LoggerFactory.getLogger(LoggerName.COMMERCIAL_LOGGER_NAME);
+    private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.ROCKETMQ_STATS_LOGGER_NAME);
+    private static final InternalLogger COMMERCIAL_LOG = InternalLoggerFactory.getLogger(LoggerName.COMMERCIAL_LOGGER_NAME);
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
         "BrokerStatsThread"));
     private final ScheduledExecutorService commercialExecutor = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
@@ -109,6 +109,7 @@ public class BrokerStatsManager {
 
     public void shutdown() {
         this.scheduledExecutorService.shutdown();
+        this.commercialExecutor.shutdown();
     }
 
     public StatsItem getStatsItem(final String statsName, final String statsKey) {
@@ -118,6 +119,26 @@ public class BrokerStatsManager {
         }
 
         return null;
+    }
+
+    public void onTopicDeleted(final String topic) {
+        this.statsTable.get(TOPIC_PUT_NUMS).delValue(topic);
+        this.statsTable.get(TOPIC_PUT_SIZE).delValue(topic);
+        this.statsTable.get(GROUP_GET_NUMS).delValueByPrefixKey(topic, "@");
+        this.statsTable.get(GROUP_GET_SIZE).delValueByPrefixKey(topic, "@");
+        this.statsTable.get(SNDBCK_PUT_NUMS).delValueByPrefixKey(topic, "@");
+        this.statsTable.get(GROUP_GET_LATENCY).delValueByInfixKey(topic, "@");
+        this.momentStatsItemSetFallSize.delValueByInfixKey(topic, "@");
+        this.momentStatsItemSetFallTime.delValueByInfixKey(topic, "@");
+    }
+
+    public void onGroupDeleted(final String group) {
+        this.statsTable.get(GROUP_GET_NUMS).delValueBySuffixKey(group, "@");
+        this.statsTable.get(GROUP_GET_SIZE).delValueBySuffixKey(group, "@");
+        this.statsTable.get(SNDBCK_PUT_NUMS).delValueBySuffixKey(group, "@");
+        this.statsTable.get(GROUP_GET_LATENCY).delValueBySuffixKey(group, "@");
+        this.momentStatsItemSetFallSize.delValueBySuffixKey(group, "@");
+        this.momentStatsItemSetFallTime.delValueBySuffixKey(group, "@");
     }
 
     public void incTopicPutNums(final String topic) {
