@@ -17,6 +17,18 @@
 
 package org.apache.rocketmq.store;
 
+import org.apache.rocketmq.common.BrokerConfig;
+import org.apache.rocketmq.common.message.MessageExt;
+import org.apache.rocketmq.store.config.FlushDiskType;
+import org.apache.rocketmq.store.config.MessageStoreConfig;
+import org.apache.rocketmq.store.config.StorePathConfigHelper;
+import org.apache.rocketmq.store.stats.BrokerStatsManager;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.junit.MockitoJUnitRunner;
+
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.lang.reflect.InvocationTargetException;
@@ -32,18 +44,6 @@ import java.nio.channels.OverlappingFileLockException;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.apache.rocketmq.common.BrokerConfig;
-import org.apache.rocketmq.common.UtilAll;
-import org.apache.rocketmq.common.message.MessageExt;
-import org.apache.rocketmq.store.config.FlushDiskType;
-import org.apache.rocketmq.store.config.MessageStoreConfig;
-import org.apache.rocketmq.store.config.StorePathConfigHelper;
-import org.apache.rocketmq.store.stats.BrokerStatsManager;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.junit.MockitoJUnitRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertTrue;
@@ -96,18 +96,19 @@ public class DefaultMessageStoreTest {
 
     @After
     public void destroy() {
-        messageStore.shutdown();
-        messageStore.destroy();
+        // todo yxs 注释掉以下代码,否则会删除store目录下的 commitlog 等文件
+//        messageStore.shutdown();
+//        messageStore.destroy();
 
-        MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
-        File file = new File(messageStoreConfig.getStorePathRootDir());
-        UtilAll.deleteFile(file);
+//        MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
+//        File file = new File(messageStoreConfig.getStorePathRootDir());
+//        UtilAll.deleteFile(file);
     }
 
     private MessageStore buildMessageStore() throws Exception {
         MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
-        messageStoreConfig.setMappedFileSizeCommitLog(1024 * 1024 * 10);
-        messageStoreConfig.setMappedFileSizeConsumeQueue(1024 * 1024 * 10);
+        messageStoreConfig.setMappedFileSizeCommitLog(1024 * 10);
+        messageStoreConfig.setMappedFileSizeConsumeQueue(1024);
         messageStoreConfig.setMaxHashSlotNum(10000);
         messageStoreConfig.setMaxIndexNum(100 * 100);
         messageStoreConfig.setFlushDiskType(FlushDiskType.SYNC_FLUSH);
@@ -122,22 +123,25 @@ public class DefaultMessageStoreTest {
         long totalMsgs = ipv4HostMsgs + ipv6HostMsgs;
         QUEUE_TOTAL = 1;
         MessageBody = StoreMessage.getBytes();
+
+//        messageStore.putMessage(buildMessage());
+
         for (long i = 0; i < ipv4HostMsgs; i++) {
             messageStore.putMessage(buildMessage());
         }
 
-        for (long i = 0; i < ipv6HostMsgs; i++) {
-            messageStore.putMessage(buildIPv6HostMessage());
-        }
-
-        StoreTestUtil.waitCommitLogReput((DefaultMessageStore) messageStore);
-
-        for (long i = 0; i < totalMsgs; i++) {
-            GetMessageResult result = messageStore.getMessage("GROUP_A", "FooBar", 0, i, 1024 * 1024, null);
-            assertThat(result).isNotNull();
-            result.release();
-        }
-        verifyThatMasterIsFunctional(totalMsgs, messageStore);
+//        for (long i = 0; i < ipv6HostMsgs; i++) {
+//            messageStore.putMessage(buildIPv6HostMessage());
+//        }
+//
+//        StoreTestUtil.waitCommitLogReput((DefaultMessageStore) messageStore);
+//
+//        for (long i = 0; i < totalMsgs; i++) {
+//            GetMessageResult result = messageStore.getMessage("GROUP_A", "FooBar", 0, i, 1024 * 1024, null);
+//            assertThat(result).isNotNull();
+//            result.release();
+//        }
+//        verifyThatMasterIsFunctional(totalMsgs, messageStore);
     }
 
     @Test
