@@ -60,6 +60,7 @@ public class MappedFile extends ReferenceResource {
     protected ByteBuffer writeBuffer = null;
     protected TransientStorePool transientStorePool = null;
     private String fileName;
+    // 起始偏移量
     private long fileFromOffset;
     private File file;
     private MappedByteBuffer mappedByteBuffer;
@@ -160,6 +161,7 @@ public class MappedFile extends ReferenceResource {
 
         try {
             this.fileChannel = new RandomAccessFile(this.file, "rw").getChannel();
+            // todo yxs 操作系统级别提供的mmap函数
             this.mappedByteBuffer = this.fileChannel.map(MapMode.READ_WRITE, 0, fileSize);
             TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(fileSize);
             TOTAL_MAPPED_FILES.incrementAndGet();
@@ -301,6 +303,7 @@ public class MappedFile extends ReferenceResource {
             //no need to commit data to file channel, so just regard wrotePosition as committedPosition.
             return this.wrotePosition.get();
         }
+        // 判断如果提交的数据不满足设置的刷盘页数(commitLeastPages),则不执行提交，待下一次凑够再提交。或者刷新时间间隔到了也会触发刷盘。
         if (this.isAbleToCommit(commitLeastPages)) {
             if (this.hold()) {
                 commit0(commitLeastPages);
@@ -345,6 +348,7 @@ public class MappedFile extends ReferenceResource {
             return true;
         }
 
+        // 判断需刷盘的页是否>=设置的参数值
         if (flushLeastPages > 0) {
             return ((write / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE)) >= flushLeastPages;
         }
@@ -488,6 +492,7 @@ public class MappedFile extends ReferenceResource {
         ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
         int flush = 0;
         long time = System.currentTimeMillis();
+        // todo yxs 每一个4KB页，写入一个字节 初始化值0，因为OS默认的缓存页大小是4KB
         for (int i = 0, j = 0; i < this.fileSize; i += MappedFile.OS_PAGE_SIZE, j++) {
             byteBuffer.put(i, (byte) 0);
             // force flush when flush disk type is sync
@@ -499,6 +504,7 @@ public class MappedFile extends ReferenceResource {
             }
 
             // prevent gc
+            // todo yxs 这里注释是 prevent gc，不明白是什么意思; Thread.sleep(0),这里会退出占用CPU时间片，让给其它就绪的线程。当前线程仍是就绪状态。后续有可能被重新调用。
             if (j % 1000 == 0) {
                 log.info("j={}, costTime={}", j, System.currentTimeMillis() - time);
                 time = System.currentTimeMillis();
@@ -519,6 +525,7 @@ public class MappedFile extends ReferenceResource {
         log.info("mapped file warm-up done. mappedFile={}, costTime={}", this.getFileName(),
             System.currentTimeMillis() - beginTime);
 
+        // todo yxs 预热完成后，调用mlock方法，将page cache锁住到内存中。防止把预约过的文件虚拟内存交换到swap空间中。
         this.mlock();
     }
 
@@ -551,11 +558,13 @@ public class MappedFile extends ReferenceResource {
         final long address = ((DirectBuffer) (this.mappedByteBuffer)).address();
         Pointer pointer = new Pointer(address);
         {
+            // 将锁住指定的内存区域，防止被操作系统调度到swap空间中
             int ret = LibC.INSTANCE.mlock(pointer, new NativeLong(this.fileSize));
             log.info("mlock {} {} {} ret = {} time consuming = {}", address, this.fileName, this.fileSize, ret, System.currentTimeMillis() - beginTime);
         }
 
         {
+            // 一次性先将一段数据读入到内存映射区域，这样就减少了后面出现内存缺页异常
             int ret = LibC.INSTANCE.madvise(pointer, new NativeLong(this.fileSize), LibC.MADV_WILLNEED);
             log.info("madvise {} {} {} ret = {} time consuming = {}", address, this.fileName, this.fileSize, ret, System.currentTimeMillis() - beginTime);
         }

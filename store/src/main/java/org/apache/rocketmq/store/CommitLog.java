@@ -985,6 +985,7 @@ public class CommitLog {
             if (!this.defaultMessageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
                 flushCommitLogService.wakeup();
             } else {
+                // 开启了transientStorePool,使用堆外内存的方式；相对于flushCommitLogService的方式优点在于，能减少pagecache的竞争。
                 commitLogService.wakeup();
             }
         }
@@ -1239,6 +1240,11 @@ public class CommitLog {
         protected static final int RETRY_TIMES_OVER = 10;
     }
 
+    /**
+     * 异步刷盘，使用堆外内存directByteBuffer，能减少page cache的锁竞争。
+     * 类似于读写分离。写-写入到对外内存directByteBuffer，然后通过2步刷盘。一步是刷到pagecache，一步是刷到磁盘。
+     * fileChannel.write()
+     */
     class CommitRealTimeService extends FlushCommitLogService {
 
         private long lastCommitTimestamp = 0;
@@ -1292,6 +1298,9 @@ public class CommitLog {
         }
     }
 
+    /**
+     * 异步刷盘-将pagecache中的数据持久化到磁盘，mappedByteBuffer.force()
+     */
     class FlushRealTimeService extends FlushCommitLogService {
         private long lastFlushTimestamp = 0;
         private long printTimes = 0;
@@ -1312,6 +1321,8 @@ public class CommitLog {
 
                 // Print flush progress
                 long currentTimeMillis = System.currentTimeMillis();
+
+                // 如果距离上次刷盘的时间间隔超过10s，则也会触发立刻刷盘
                 if (currentTimeMillis >= (this.lastFlushTimestamp + flushPhysicQueueThoroughInterval)) {
                     this.lastFlushTimestamp = currentTimeMillis;
                     flushPhysicQueueLeastPages = 0;
