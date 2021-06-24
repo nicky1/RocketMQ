@@ -1274,6 +1274,7 @@ public class CommitLog {
                 try {
                     boolean result = CommitLog.this.mappedFileQueue.commit(commitDataLeastPages);
                     long end = System.currentTimeMillis();
+                    // result=false ,commit成功
                     if (!result) {
                         this.lastCommitTimestamp = end; // result = false means some data committed.
                         //now wake up flush thread.
@@ -1701,6 +1702,7 @@ public class CommitLog {
             keyBuilder.append('-');
             keyBuilder.append(messageExtBatch.getQueueId());
             String key = keyBuilder.toString();
+            // queueOffset：commitlog中累加1，作为consumequeue数组的下标
             Long queueOffset = CommitLog.this.topicQueueTable.get(key);
             if (null == queueOffset) {
                 queueOffset = 0L;
