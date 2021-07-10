@@ -103,6 +103,9 @@ public class HAConnection {
         public void run() {
             HAConnection.log.info(this.getServiceName() + " service started");
 
+            /**
+             * 一直轮询处理
+             */
             while (!this.isStopped()) {
                 try {
                     this.selector.select(1000);
@@ -213,6 +216,7 @@ public class HAConnection {
 
         private final int headerSize = 8 + 4;
         private final ByteBuffer byteBufferHeader = ByteBuffer.allocate(headerSize);
+        // 下一次传输的位置,初始值-1
         private long nextTransferFromWhere = -1;
         private SelectMappedBufferResult selectMappedBufferResult;
         private boolean lastWriteOver = true;
@@ -221,6 +225,7 @@ public class HAConnection {
         public WriteSocketService(final SocketChannel socketChannel) throws IOException {
             this.selector = RemotingUtil.openSelector();
             this.socketChannel = socketChannel;
+            // 注册监听写事件
             this.socketChannel.register(this.selector, SelectionKey.OP_WRITE);
             this.setDaemon(true);
         }
@@ -229,16 +234,26 @@ public class HAConnection {
         public void run() {
             HAConnection.log.info(this.getServiceName() + " service started");
 
+            /**
+             * 线程内一直轮询处理
+             */
             while (!this.isStopped()) {
                 try {
+                    // 等待写事件
                     this.selector.select(1000);
 
+                    // 如果slaveRequestOffset=-1,说明master还未收到slave broker的同步拉取请求,则放弃本次请求处理
+                    // slaveRequestOffset在收到slave broker拉取请求时更新
                     if (-1 == HAConnection.this.slaveRequestOffset) {
+                        // 主动休眠10毫秒
                         Thread.sleep(10);
                         continue;
                     }
 
+                    // 如果nextTransferFromWhere=-1,则为首次进行数据传输,需要计算传输的物理偏移量
                     if (-1 == this.nextTransferFromWhere) {
+                        // 如果slaveRequestOffset=0,则从当前最后一个commitLog文件(MappedFile)的起始偏移量开始传输;否则根据slave broker的拉取请求的偏移量开始传输
+                        // todo yxs 这里为什么这么设计,猜测是用来处理异常情况,避免一次同步大量数据,对broker master造成压力。
                         if (0 == HAConnection.this.slaveRequestOffset) {
                             long masterOffset = HAConnection.this.haService.getDefaultMessageStore().getCommitLog().getMaxOffset();
                             masterOffset =
@@ -259,6 +274,7 @@ public class HAConnection {
                             + "], and slave request " + HAConnection.this.slaveRequestOffset);
                     }
 
+                    // 如果上次传输未结束,因为NIO设置非阻塞情况下,并不是等待数据写完再返回,而是写一部分就返回。所以这里要判断是否传输结束.
                     if (this.lastWriteOver) {
 
                         long interval =
@@ -284,9 +300,11 @@ public class HAConnection {
                             continue;
                     }
 
+                    // 调用master broker store存储引擎层,读取commitLog
                     SelectMappedBufferResult selectResult =
                         HAConnection.this.haService.getDefaultMessageStore().getCommitLogData(this.nextTransferFromWhere);
                     if (selectResult != null) {
+                        // 默认32KB,不能超过最大传输大小
                         int size = selectResult.getSize();
                         if (size > HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig().getHaTransferBatchSize()) {
                             size = HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig().getHaTransferBatchSize();
@@ -308,6 +326,7 @@ public class HAConnection {
                         this.lastWriteOver = this.transferData();
                     } else {
 
+                        // 如果没有拉取到commitLog,则等待应用层追加
                         HAConnection.this.haService.getWaitNotifyObject().allWaitForRunning(100);
                     }
                 } catch (Exception e) {
