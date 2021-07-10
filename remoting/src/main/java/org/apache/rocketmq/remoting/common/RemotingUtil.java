@@ -19,21 +19,18 @@ package org.apache.rocketmq.remoting.common;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import org.apache.rocketmq.logging.InternalLogger;
+import org.apache.rocketmq.logging.InternalLoggerFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
-import java.net.Inet6Address;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.NetworkInterface;
-import java.net.SocketAddress;
+import java.net.*;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.ArrayList;
 import java.util.Enumeration;
-import org.apache.rocketmq.logging.InternalLogger;
-import org.apache.rocketmq.logging.InternalLoggerFactory;
 
 public class RemotingUtil {
     public static final String OS_NAME = System.getProperty("os.name");
@@ -186,12 +183,19 @@ public class RemotingUtil {
         SocketChannel sc = null;
         try {
             sc = SocketChannel.open();
+            // 连接之前通道是阻塞的,保证通道获取成功
             sc.configureBlocking(true);
+            // 调用close后不再阻塞等待而是立即关闭底层连接
             sc.socket().setSoLinger(false, -1);
+            // 关闭Nagle算法(包合并批量发送,Nagle算法解决小包问题，提高网络效率。但心跳包slaveoffset的大小是8个字节，如果开启该算法,则心跳包会延迟;所以需要关闭)
             sc.socket().setTcpNoDelay(true);
+            // 设置接收缓冲区大小
             sc.socket().setReceiveBufferSize(1024 * 64);
+            // 设置发送缓冲区大小
             sc.socket().setSendBufferSize(1024 * 64);
+
             sc.socket().connect(remote, timeoutMillis);
+            // 连接之后通道是非阻塞的
             sc.configureBlocking(false);
             return sc;
         } catch (Exception e) {

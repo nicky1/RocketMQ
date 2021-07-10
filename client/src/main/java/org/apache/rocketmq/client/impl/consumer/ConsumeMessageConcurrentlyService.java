@@ -214,6 +214,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
             // 超过batchSize，则分批提交
             for (int total = 0; total < msgs.size(); ) {
                 List<MessageExt> msgThis = new ArrayList<MessageExt>(consumeBatchSize);
+                // consumeBatchSize 默认=1
                 for (int i = 0; i < consumeBatchSize; i++, total++) {
                     if (total < msgs.size()) {
                         msgThis.add(msgs.get(total));
@@ -287,7 +288,9 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
                 }
                 break;
             case CLUSTERING:
+                // 这里会不会有一个重复消费的问题: 一组默认1条条消息，有一个消息消费失败，返回RECONSUME_LATER，ackIndex被置为-1
                 List<MessageExt> msgBackFailed = new ArrayList<MessageExt>(consumeRequest.getMsgs().size());
+
                 for (int i = ackIndex + 1; i < consumeRequest.getMsgs().size(); i++) {
                     MessageExt msg = consumeRequest.getMsgs().get(i);
                     //
@@ -308,9 +311,8 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
                 break;
         }
 
-
+        // 这里返回的offset是这一批消息中消费未成功的消息中的最小的偏移量
         long offset = consumeRequest.getProcessQueue().removeMessage(consumeRequest.getMsgs());
-        // 这里返回的offset是这一批消息中最小的偏移量，
         if (offset >= 0 && !consumeRequest.getProcessQueue().isDropped()) {
             // 更新队列的消费进度:广播模式，存储在本地;集群模式，存储在broker服务端
             // 先更新consumer本地的offset，然后由定时任务同步到broker，以此持久化消费进度到broker端

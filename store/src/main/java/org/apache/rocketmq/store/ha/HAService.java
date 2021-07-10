@@ -16,22 +16,6 @@
  */
 package org.apache.rocketmq.store.ha;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.ClosedChannelException;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import org.apache.rocketmq.common.ServiceThread;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
@@ -40,6 +24,19 @@ import org.apache.rocketmq.remoting.common.RemotingUtil;
 import org.apache.rocketmq.store.CommitLog;
 import org.apache.rocketmq.store.DefaultMessageStore;
 import org.apache.rocketmq.store.PutMessageStatus;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class HAService {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
@@ -107,6 +104,7 @@ public class HAService {
     // }
 
     public void start() throws Exception {
+        // 默认10912端口,监听salve的连接
         this.acceptSocketService.beginAccept();
         this.acceptSocketService.start();
         this.groupTransferService.start();
@@ -216,6 +214,7 @@ public class HAService {
                                         + sc.socket().getRemoteSocketAddress());
 
                                     try {
+                                        // 每个slave对应新建一个HAConnection
                                         HAConnection conn = new HAConnection(HAService.this, sc);
                                         conn.start();
                                         HAService.this.addConnection(conn);
@@ -327,8 +326,10 @@ public class HAService {
     class HAClient extends ServiceThread {
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024 * 4;
         private final AtomicReference<String> masterAddress = new AtomicReference<>();
+        // slave offset
         private final ByteBuffer reportOffset = ByteBuffer.allocate(8);
         private SocketChannel socketChannel;
+        // java nio I/O复用
         private Selector selector;
         private long lastWriteTimestamp = System.currentTimeMillis();
 
@@ -402,6 +403,10 @@ public class HAService {
             this.byteBufferBackup = tmp;
         }
 
+        /**
+         * slave在收到master的新数据后,实现如何同步到本broker的commitlog中
+         * 其实现主要还是依赖于commitlogService
+         */
         private boolean processReadEvent() {
             int readSizeZeroTimes = 0;
             while (this.byteBufferRead.hasRemaining()) {
@@ -409,6 +414,7 @@ public class HAService {
                     int readSize = this.socketChannel.read(this.byteBufferRead);
                     if (readSize > 0) {
                         readSizeZeroTimes = 0;
+                        // 处理master同步过来的commitlog消息
                         boolean result = this.dispatchReadRequest();
                         if (!result) {
                             log.error("HAClient, dispatchReadRequest error");
@@ -431,11 +437,25 @@ public class HAService {
             return true;
         }
 
+        /**
+         * master-->slave的commitlog消息，写入slave broker本地的commitlog文件中
+         */
         private boolean dispatchReadRequest() {
+            // 消息体结构:物理偏移量(8个字节)+消息体大小(4)个字节+消息内容
             final int msgHeaderSize = 8 + 4; // phyoffset + size
             int readSocketPos = this.byteBufferRead.position();
 
+            /**
+             *
+             * |-----------------------|dispatchPosition-----------------------|position|
+             * |-----------------------|---offset---|---bodySize---|---commitLog data---|
+             * |---byteBufferRead--|--byteBufferRead----|
+             *
+             */
             while (true) {
+                // dispatchPosition:指向socket包的开头位置;  position:tcp socket发送过来的最大位置
+                // 所以下面要判断position的位置,是否完整。
+                // master发送给slave 同步commitLog的数据结构是: 8+4+commitLog data
                 int diff = this.byteBufferRead.position() - this.dispatchPosition;
                 if (diff >= msgHeaderSize) {
                     long masterPhyOffset = this.byteBufferRead.getLong(this.dispatchPosition);
@@ -451,13 +471,16 @@ public class HAService {
                         }
                     }
 
+                    // tcp数据包,考虑黏包和拆包的问题;接收到的报文是完整的(8+4+body)才进行解析处理
                     if (diff >= (msgHeaderSize + bodySize)) {
                         byte[] bodyData = new byte[bodySize];
                         this.byteBufferRead.position(this.dispatchPosition + msgHeaderSize);
                         this.byteBufferRead.get(bodyData);
 
+                        // 写入到slave本地commitlog中
                         HAService.this.defaultMessageStore.appendToCommitLog(masterPhyOffset, bodyData);
 
+                        // todo yxs 回到读的位置,position的位置不变。这是为什么???
                         this.byteBufferRead.position(readSocketPos);
                         this.dispatchPosition += msgHeaderSize + bodySize;
 
@@ -549,17 +572,23 @@ public class HAService {
 
             while (!this.isStopped()) {
                 try {
+                    // 使用jdk原生NIO,连接到master
+                    // todo yxs 这里不需要判断是否是slave吗???
                     if (this.connectMaster()) {
 
+                        // 判断是否需要向master同步当前的消息拉取的偏移量,默认5s一次
                         if (this.isTimeToReportOffset()) {
+                            // 同步slave当前的最大消息偏移量给master,等待master发送最新的消息
                             boolean result = this.reportSlaveMaxOffset(this.currentReportedOffset);
                             if (!result) {
                                 this.closeMaster();
                             }
                         }
 
+                        // NIO,这里的逻辑还不明白;I/O复用,检查是否有读事件
                         this.selector.select(1000);
 
+                        // 核心逻辑,处理获取到的消息数据
                         boolean ok = this.processReadEvent();
                         if (!ok) {
                             this.closeMaster();

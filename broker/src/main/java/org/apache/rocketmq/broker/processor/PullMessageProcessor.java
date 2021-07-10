@@ -16,13 +16,7 @@
  */
 package org.apache.rocketmq.broker.processor;
 
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.FileRegion;
-import java.nio.ByteBuffer;
-import java.util.List;
+import io.netty.channel.*;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.client.ConsumerGroupInfo;
 import org.apache.rocketmq.broker.filter.ConsumerFilterData;
@@ -69,6 +63,12 @@ import org.apache.rocketmq.store.PutMessageResult;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
 
+import java.nio.ByteBuffer;
+import java.util.List;
+
+/**
+ * broker-拉取消息处理器
+ */
 public class PullMessageProcessor extends AsyncNettyRequestProcessor implements NettyRequestProcessor {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final BrokerController brokerController;
@@ -89,6 +89,13 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
         return false;
     }
 
+    /**
+     * broker-server:处理拉取消息的请求,会调用存储层
+     * 1.这里有长轮询的设计思路-
+     *  即broker端拉取不到消息时，并不会直接将空集合返回给consumer端，这样的拉取不到数据的无效请求，会增加网络带宽的压力。
+     *  长轮询-broker端拉取不到消息，即producer没有生产新消息时，broker挂起pullRequest请求，直到有新的消息
+     *  或者超过最大挂起时间-suspendTimeoutMillis
+     */
     private RemotingCommand processRequest(final Channel channel, RemotingCommand request, boolean brokerAllowSuspend)
         throws RemotingCommandException {
         RemotingCommand response = RemotingCommand.createResponseCommand(PullMessageResponseHeader.class);
@@ -265,6 +272,7 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
 
             if (this.brokerController.getBrokerConfig().isSlaveReadEnable()) {
                 // consume too slow ,redirect to another machine
+                // todo yxs 这里不懂设计意图
                 if (getMessageResult.isSuggestPullingFromSlave()) {
                     responseHeader.setSuggestWhichBrokerId(subscriptionGroupConfig.getWhichBrokerWhenConsumeSlowly());
                 }
@@ -368,9 +376,11 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                 this.executeConsumeMessageHookBefore(context);
             }
 
+            // 真正处理从存储层拉取到消息后，broker的处理逻辑
             switch (response.getCode()) {
                 case ResponseCode.SUCCESS:
 
+                    // broker-统计信息
                     this.brokerController.getBrokerStatsManager().incGroupGetNums(requestHeader.getConsumerGroup(), requestHeader.getTopic(),
                         getMessageResult.getMessageCount());
 
@@ -378,6 +388,8 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                         getMessageResult.getBufferTotalSize());
 
                     this.brokerController.getBrokerStatsManager().incBrokerGetNums(getMessageResult.getMessageCount());
+
+                    // 读取堆外内存
                     if (this.brokerController.getBrokerConfig().isTransferMsgByHeap()) {
                         final long beginTimeMills = this.brokerController.getMessageStore().now();
                         final byte[] r = this.readGetMessageResult(getMessageResult, requestHeader.getConsumerGroup(), requestHeader.getTopic(), requestHeader.getQueueId());
@@ -386,6 +398,8 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                             (int) (this.brokerController.getMessageStore().now() - beginTimeMills));
                         response.setBody(r);
                     } else {
+                        // 使用零拷贝,不响应response对象。那consumer怎么获取到数据
+                        // todo yxs
                         try {
                             FileRegion fileRegion =
                                 new ManyMessageTransfer(response.encodeHeader(getMessageResult.getBufferTotalSize()), getMessageResult);
@@ -408,6 +422,8 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                     break;
                 case ResponseCode.PULL_NOT_FOUND:
 
+                    // 长轮询机制-即broker允许挂起,没有读到消息，则hold住请求，等到有消息，broker唤醒PullRequestHoldService线程
+                    // 等待超时后还是没读到，则brokerAllowSuspend=false
                     if (brokerAllowSuspend && hasSuspendFlag) {
                         long pollingTimeMills = suspendTimeoutMillisLong;
                         if (!this.brokerController.getBrokerConfig().isLongPollingEnable()) {

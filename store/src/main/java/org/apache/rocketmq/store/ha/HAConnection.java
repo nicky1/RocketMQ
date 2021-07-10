@@ -16,17 +16,18 @@
  */
 package org.apache.rocketmq.store.ha;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.SocketChannel;
 import org.apache.rocketmq.common.ServiceThread;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.remoting.common.RemotingUtil;
 import org.apache.rocketmq.store.SelectMappedBufferResult;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
 
 public class HAConnection {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
@@ -36,7 +37,9 @@ public class HAConnection {
     private WriteSocketService writeSocketService;
     private ReadSocketService readSocketService;
 
+    // slave请求发送的offset
     private volatile long slaveRequestOffset = -1;
+    // slave响应的offset
     private volatile long slaveAckOffset = -1;
 
     public HAConnection(final HAService haService, final SocketChannel socketChannel) throws IOException {
@@ -78,6 +81,9 @@ public class HAConnection {
         return socketChannel;
     }
 
+    /**
+     * master处理slave发送过来的请求
+     */
     class ReadSocketService extends ServiceThread {
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024;
         private final Selector selector;
@@ -106,6 +112,7 @@ public class HAConnection {
                         break;
                     }
 
+                    // 若两次读事件的时间间隔值超过既定值,则认为master和slave连接失败,跳出循环.
                     long interval = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now() - this.lastReadTimestamp;
                     if (interval > HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig().getHaHousekeepingInterval()) {
                         log.warn("ha housekeeping, found this connection[" + HAConnection.this.clientAddr + "] expired, " + interval);
@@ -145,6 +152,9 @@ public class HAConnection {
             return ReadSocketService.class.getSimpleName();
         }
 
+        /**
+         * 处理slave发送过来的读事件
+         */
         private boolean processReadEvent() {
             int readSizeZeroTimes = 0;
 
@@ -159,8 +169,11 @@ public class HAConnection {
                     if (readSize > 0) {
                         readSizeZeroTimes = 0;
                         this.lastReadTimestamp = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now();
+                        // 超过8个字节的才处理-因为slave发送的就是8个字节的offset的心跳包
                         if ((this.byteBufferRead.position() - this.processPosition) >= 8) {
+                            //获取离byteBufferRead.position()最近的8的整除数（获取最后一个完整的包
                             int pos = this.byteBufferRead.position() - (this.byteBufferRead.position() % 8);
+                            //读取能读取到的最后一个有效的8个字节的心跳包
                             long readOffset = this.byteBufferRead.getLong(pos - 8);
                             this.processPosition = pos;
 
@@ -170,6 +183,7 @@ public class HAConnection {
                                 log.info("slave[" + HAConnection.this.clientAddr + "] request offset " + readOffset);
                             }
 
+                            //通知slaveAckOffset已经更新,适用于同步复制的场景;触发broker处理下一条producer生产的消息
                             HAConnection.this.haService.notifyTransferSome(HAConnection.this.slaveAckOffset);
                         }
                     } else if (readSize == 0) {
@@ -190,6 +204,9 @@ public class HAConnection {
         }
     }
 
+    /**
+     * master发送commitLog到slave
+     */
     class WriteSocketService extends ServiceThread {
         private final Selector selector;
         private final SocketChannel socketChannel;

@@ -1304,7 +1304,7 @@ public class CommitLog {
     }
 
     /**
-     * 异步刷盘-将pagecache中的数据持久化到磁盘，mappedByteBuffer.force()
+     * 异步刷盘,默认-将pagecache中的数据持久化到磁盘，mappedByteBuffer.force()
      */
     class FlushRealTimeService extends FlushCommitLogService {
         private long lastFlushTimestamp = 0;
@@ -1420,7 +1420,7 @@ public class CommitLog {
     }
 
     /**
-     * GroupCommit Service
+     * 同步刷盘,GroupCommit Service
      */
     class GroupCommitService extends FlushCommitLogService {
         private volatile List<GroupCommitRequest> requestsWrite = new ArrayList<GroupCommitRequest>();
